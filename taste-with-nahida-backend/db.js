@@ -1,0 +1,134 @@
+require('dotenv').config();
+const { createClient } = require('@libsql/client');
+const bcrypt = require('bcryptjs');
+
+// If TURSO_DATABASE_URL is not set, falls back to a local file database
+// (great for local development without a Turso account yet).
+const url = process.env.TURSO_DATABASE_URL || 'file:local.db';
+const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
+
+if (!process.env.TURSO_DATABASE_URL) {
+  console.log('ℹ No TURSO_DATABASE_URL set — using a local file database (local.db). Data will not sync to Turso.');
+}
+
+const client = createClient(authToken ? { url, authToken } : { url });
+
+// ---------- Schema ----------
+async function initSchema() {
+  await client.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS admins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS recipes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      category TEXT NOT NULL,
+      summary TEXT,
+      ingredients TEXT,
+      steps TEXT,
+      image_url TEXT,
+      published INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      restaurant_name TEXT NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      country TEXT NOT NULL,
+      location TEXT,
+      rating REAL NOT NULL CHECK(rating >= 0 AND rating <= 5),
+      body TEXT,
+      image_url TEXT,
+      published INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS blog_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      country TEXT,
+      body TEXT,
+      image_url TEXT,
+      published INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS gallery_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      image_url TEXT NOT NULL,
+      caption TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      subject TEXT,
+      message TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      read INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+// ---------- Seed the admin user from .env, if not already present ----------
+async function ensureAdmin() {
+  const email = (process.env.ADMIN_EMAIL || 'admin@tastewithnahida.com').toLowerCase();
+  const existing = await client.execute({ sql: 'SELECT id FROM admins WHERE email = ?', args: [email] });
+  if (existing.rows.length === 0) {
+    const rawPassword = process.env.ADMIN_PASSWORD || 'changeme123';
+    const hash = bcrypt.hashSync(rawPassword, 10);
+    await client.execute({ sql: 'INSERT INTO admins (email, password_hash) VALUES (?, ?)', args: [email, hash] });
+    console.log(`✔ Admin account created: ${email}`);
+  }
+}
+
+let readyPromise = null;
+function ready() {
+  if (!readyPromise) {
+    readyPromise = initSchema().then(ensureAdmin);
+  }
+  return readyPromise;
+}
+
+// ---------- Query helpers (mimic the old better-sqlite3-style API, but async) ----------
+function toPlainRows(rs) {
+  return rs.rows.map(row => ({ ...row }));
+}
+
+async function all(sql, args = []) {
+  const rs = await client.execute({ sql, args });
+  return toPlainRows(rs);
+}
+
+async function get(sql, args = []) {
+  const rows = await all(sql, args);
+  return rows[0] || null;
+}
+
+async function run(sql, args = []) {
+  const rs = await client.execute({ sql, args });
+  return {
+    lastInsertRowid: rs.lastInsertRowid !== undefined ? Number(rs.lastInsertRowid) : undefined,
+    changes: rs.rowsAffected
+  };
+}
+
+module.exports = { client, ready, all, get, run };
