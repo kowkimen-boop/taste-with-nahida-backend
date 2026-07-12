@@ -85,6 +85,45 @@ async function initSchema() {
       email TEXT UNIQUE NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS ingredients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      unit TEXT NOT NULL,
+      cost_per_unit REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      category TEXT,
+      selling_price REAL NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS product_ingredients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+      quantity REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      product_name TEXT NOT NULL,
+      quantity_sold REAL NOT NULL,
+      sale_price_per_unit REAL NOT NULL,
+      cost_per_unit_snapshot REAL NOT NULL,
+      profit_total REAL NOT NULL,
+      sale_date TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 }
 

@@ -20,4 +20,16 @@ async function uniqueSlug(db, table, baseText) {
   return slug;
 }
 
-module.exports = { slugify, uniqueSlug };
+// Computes the cost to make one unit of a product from its linked ingredients.
+async function getProductCost(db, productId) {
+  const rows = await db.all(
+    `SELECT pi.quantity, i.cost_per_unit
+     FROM product_ingredients pi
+     JOIN ingredients i ON i.id = pi.ingredient_id
+     WHERE pi.product_id = ?`,
+    [productId]
+  );
+  return rows.reduce((sum, r) => sum + (r.quantity * r.cost_per_unit), 0);
+}
+
+module.exports = { slugify, uniqueSlug, getProductCost };

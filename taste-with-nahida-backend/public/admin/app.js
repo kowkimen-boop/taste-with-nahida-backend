@@ -83,7 +83,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 
 function loadTab(name) {
   const loaders = { recipes: renderRecipes, reviews: renderReviews, blog: renderBlog,
-    gallery: renderGallery, messages: renderMessages, subscribers: renderSubscribers };
+    gallery: renderGallery, messages: renderMessages, subscribers: renderSubscribers,
+    business: renderBusiness };
   loaders[name]();
 }
 
@@ -392,6 +393,312 @@ async function renderSubscribers() {
     </tr>`).join('')}
   </table>`;
   list.querySelectorAll('[data-del]').forEach(b => b.onclick = () => confirmDelete('/newsletter/' + b.dataset.del, renderSubscribers));
+}
+
+// ================= BUSINESS (Ingredients / Products / Sales) =================
+let businessSubTab = 'products';
+
+async function renderBusiness() {
+  const el = document.getElementById('tab-business');
+  el.innerHTML = `
+    <div class="tab-head">
+      <h2>Business</h2>
+    </div>
+    <div class="filter-row" style="justify-content:flex-start; margin-bottom:20px;">
+      <button class="filter-chip biz-sub ${businessSubTab === 'products' ? 'active' : ''}" data-sub="products">Products</button>
+      <button class="filter-chip biz-sub ${businessSubTab === 'ingredients' ? 'active' : ''}" data-sub="ingredients">Ingredients</button>
+      <button class="filter-chip biz-sub ${businessSubTab === 'sales' ? 'active' : ''}" data-sub="sales">Sales &amp; Profit</button>
+    </div>
+    <div id="biz-content">Loading…</div>
+  `;
+  el.querySelectorAll('.biz-sub').forEach(btn => btn.onclick = () => {
+    businessSubTab = btn.dataset.sub;
+    renderBusiness();
+  });
+
+  if (businessSubTab === 'ingredients') await renderIngredientsSub();
+  else if (businessSubTab === 'sales') await renderSalesSub();
+  else await renderProductsSub();
+}
+
+function money(n) {
+  return '$' + (Math.round((n + Number.EPSILON) * 100) / 100).toFixed(2);
+}
+
+// ---------- Ingredients ----------
+async function renderIngredientsSub() {
+  const box = document.getElementById('biz-content');
+  box.innerHTML = `<div class="tab-head"><h3 style="margin:0;">Ingredients</h3><button class="btn-primary" id="add-ingredient">+ Add Ingredient</button></div><div id="ingredients-list">Loading…</div>`;
+  document.getElementById('add-ingredient').onclick = () => ingredientForm();
+  const rows = await api('/ingredients');
+  const list = document.getElementById('ingredients-list');
+  if (!rows.length) { list.innerHTML = '<div class="empty">No ingredients yet — add flour, sugar, eggs, whatever she uses most.</div>'; return; }
+  list.innerHTML = `<table><tr><th>Name</th><th>Unit</th><th>Cost per unit</th><th></th></tr>
+    ${rows.map(i => `<tr>
+      <td>${escapeHtml(i.name)}</td>
+      <td>${escapeHtml(i.unit)}</td>
+      <td>${money(i.cost_per_unit)}</td>
+      <td>
+        <button class="btn-secondary" data-edit="${i.id}">Edit</button>
+        <button class="btn-danger" data-del="${i.id}">Delete</button>
+      </td>
+    </tr>`).join('')}
+  </table>`;
+  list.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => ingredientForm(rows.find(i => i.id == b.dataset.edit)));
+  list.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this ingredient?')) return;
+    try { await api('/ingredients/' + b.dataset.del, { method: 'DELETE' }); toast('Deleted'); renderIngredientsSub(); }
+    catch (err) { alert(err.message); }
+  });
+}
+
+function ingredientForm(existing) {
+  const isEdit = !!existing;
+  const overlay = openModal(`
+    <h3>${isEdit ? 'Edit' : 'Add'} Ingredient</h3>
+    <div class="field"><label>Name</label><input id="f-name" placeholder="e.g. All-purpose flour" value="${existing ? escapeAttr(existing.name) : ''}"></div>
+    <div class="field"><label>Unit</label><input id="f-unit" placeholder="e.g. g, kg, pcs, cup" value="${existing ? escapeAttr(existing.unit) : ''}"></div>
+    <div class="field"><label>Cost per unit ($)</label><input type="number" step="0.001" id="f-cost" placeholder="e.g. 0.002 per gram" value="${existing ? existing.cost_per_unit : ''}"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="cancel">Cancel</button>
+      <button class="btn-primary" id="save">Save</button>
+    </div>
+  `);
+  overlay.querySelector('#cancel').onclick = () => overlay.remove();
+  overlay.querySelector('#save').onclick = async () => {
+    try {
+      const payload = {
+        name: overlay.querySelector('#f-name').value,
+        unit: overlay.querySelector('#f-unit').value,
+        cost_per_unit: parseFloat(overlay.querySelector('#f-cost').value)
+      };
+      if (isEdit) await api(`/ingredients/${existing.id}`, { method: 'PUT', body: payload });
+      else await api('/ingredients', { method: 'POST', body: payload });
+      overlay.remove();
+      toast('Ingredient saved');
+      renderIngredientsSub();
+    } catch (err) { alert(err.message); }
+  };
+}
+
+// ---------- Products ----------
+async function renderProductsSub() {
+  const box = document.getElementById('biz-content');
+  box.innerHTML = `<div class="tab-head"><h3 style="margin:0;">Products</h3><button class="btn-primary" id="add-product">+ Add Product</button></div><div id="products-list">Loading…</div>`;
+  document.getElementById('add-product').onclick = () => productForm();
+  const rows = await api('/products');
+  const list = document.getElementById('products-list');
+  if (!rows.length) { list.innerHTML = '<div class="empty">No products yet — add a cake, cupcake, or biryani to start tracking cost and profit.</div>'; return; }
+  list.innerHTML = `<table><tr><th>Product</th><th>Sell Price</th><th>Cost to Make</th><th>Profit/unit</th><th>Margin</th><th></th></tr>
+    ${rows.map(p => `<tr>
+      <td>${escapeHtml(p.name)}${p.category ? `<br><small>${escapeHtml(p.category)}</small>` : ''}</td>
+      <td>${money(p.selling_price)}</td>
+      <td>${money(p.cost_to_make)}</td>
+      <td style="color:${p.profit_per_unit >= 0 ? '#1F5F55' : '#c0392b'}; font-weight:600;">${money(p.profit_per_unit)}</td>
+      <td>${p.margin_percent === null ? '—' : p.margin_percent.toFixed(0) + '%'}</td>
+      <td>
+        <button class="btn-secondary" data-edit="${p.id}">Edit</button>
+        <button class="btn-danger" data-del="${p.id}">Delete</button>
+      </td>
+    </tr>`).join('')}
+  </table>`;
+  list.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
+    const full = await api('/products/' + b.dataset.edit);
+    productForm(full);
+  });
+  list.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this product? Past sales records will stay, but you won\'t be able to log new sales for it.')) return;
+    try { await api('/products/' + b.dataset.del, { method: 'DELETE' }); toast('Deleted'); renderProductsSub(); }
+    catch (err) { alert(err.message); }
+  });
+}
+
+async function productForm(existing) {
+  const isEdit = !!existing;
+  const allIngredients = await api('/ingredients');
+  if (!allIngredients.length && !isEdit) {
+    alert('Add at least one ingredient first (Ingredients tab), then come back to build a product from it.');
+    return;
+  }
+
+  let rows = existing ? existing.ingredients.map(i => ({ ingredient_id: i.ingredient_id, quantity: i.quantity })) : [];
+  if (!rows.length) rows = [{ ingredient_id: allIngredients[0]?.id || '', quantity: '' }];
+
+  const overlay = openModal(`
+    <h3>${isEdit ? 'Edit' : 'Add'} Product</h3>
+    <div class="field"><label>Name</label><input id="f-name" placeholder="e.g. Chocolate Birthday Cake" value="${existing ? escapeAttr(existing.name) : ''}"></div>
+    <div class="field"><label>Category</label><input id="f-category" placeholder="e.g. Cake, Cupcake, Biryani" value="${existing ? escapeAttr(existing.category || '') : ''}"></div>
+    <div class="field"><label>Selling Price ($)</label><input type="number" step="0.01" id="f-price" value="${existing ? existing.selling_price : ''}"></div>
+    <div class="field"><label>Notes</label><textarea id="f-notes">${existing ? escapeHtml(existing.notes || '') : ''}</textarea></div>
+    <div class="field">
+      <label>Ingredients used (per 1 unit made)</label>
+      <div id="ingredient-rows"></div>
+      <button type="button" class="btn-secondary" id="add-row" style="margin-top:8px; align-self:flex-start;">+ Add ingredient</button>
+    </div>
+    <div class="field">
+      <label>Estimated cost to make: <span id="cost-preview" style="font-weight:700;">$0.00</span></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="cancel">Cancel</button>
+      <button class="btn-primary" id="save">Save</button>
+    </div>
+  `);
+
+  const rowsContainer = overlay.querySelector('#ingredient-rows');
+
+  function ingredientOptions(selectedId) {
+    return allIngredients.map(i => `<option value="${i.id}" ${i.id == selectedId ? 'selected' : ''}>${escapeHtml(i.name)} (${escapeHtml(i.unit)})</option>`).join('');
+  }
+
+  function updateCostPreview() {
+    let total = 0;
+    rowsContainer.querySelectorAll('.ing-row').forEach(rowEl => {
+      const select = rowEl.querySelector('.ing-select');
+      const qtyInput = rowEl.querySelector('.ing-qty');
+      const ing = allIngredients.find(i => i.id == select.value);
+      const qty = parseFloat(qtyInput.value) || 0;
+      if (ing) total += ing.cost_per_unit * qty;
+    });
+    overlay.querySelector('#cost-preview').textContent = money(total);
+  }
+
+  function drawRows() {
+    rowsContainer.innerHTML = rows.map((r, idx) => `
+      <div class="ing-row" data-idx="${idx}" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+        <select class="ing-select" style="flex:2; padding:8px; border-radius:8px; border:1.5px solid var(--border);">${ingredientOptions(r.ingredient_id)}</select>
+        <input class="ing-qty" type="number" step="0.01" placeholder="qty" value="${r.quantity}" style="flex:1; padding:8px; border-radius:8px; border:1.5px solid var(--border);">
+        <button type="button" class="btn-danger row-remove" style="flex-shrink:0;">✕</button>
+      </div>
+    `).join('');
+    rowsContainer.querySelectorAll('.ing-select, .ing-qty').forEach(inp => inp.addEventListener('input', updateCostPreview));
+    rowsContainer.querySelectorAll('.row-remove').forEach(btn => btn.addEventListener('click', (e) => {
+      const idx = e.target.closest('.ing-row').dataset.idx;
+      rows.splice(idx, 1);
+      if (!rows.length) rows = [{ ingredient_id: allIngredients[0]?.id || '', quantity: '' }];
+      drawRows();
+      updateCostPreview();
+    }));
+    updateCostPreview();
+  }
+  drawRows();
+
+  overlay.querySelector('#add-row').onclick = () => {
+    rows.push({ ingredient_id: allIngredients[0]?.id || '', quantity: '' });
+    drawRows();
+  };
+
+  overlay.querySelector('#cancel').onclick = () => overlay.remove();
+  overlay.querySelector('#save').onclick = async () => {
+    try {
+      const ingredientPayload = [];
+      rowsContainer.querySelectorAll('.ing-row').forEach(rowEl => {
+        const ingredient_id = parseInt(rowEl.querySelector('.ing-select').value, 10);
+        const quantity = parseFloat(rowEl.querySelector('.ing-qty').value);
+        if (ingredient_id && quantity > 0) ingredientPayload.push({ ingredient_id, quantity });
+      });
+
+      const payload = {
+        name: overlay.querySelector('#f-name').value,
+        category: overlay.querySelector('#f-category').value,
+        selling_price: parseFloat(overlay.querySelector('#f-price').value),
+        notes: overlay.querySelector('#f-notes').value,
+        ingredients: ingredientPayload
+      };
+      if (isEdit) await api(`/products/${existing.id}`, { method: 'PUT', body: payload });
+      else await api('/products', { method: 'POST', body: payload });
+      overlay.remove();
+      toast('Product saved');
+      renderProductsSub();
+    } catch (err) { alert(err.message); }
+  };
+}
+
+// ---------- Sales ----------
+async function renderSalesSub() {
+  const box = document.getElementById('biz-content');
+  box.innerHTML = `<div class="tab-head"><h3 style="margin:0;">Sales &amp; Profit</h3><button class="btn-primary" id="log-sale">+ Log a Sale</button></div><div id="sales-summary"></div><div id="sales-list" style="margin-top:24px;">Loading…</div>`;
+  document.getElementById('log-sale').onclick = () => saleForm();
+
+  const [summary, rows] = await Promise.all([api('/sales/summary'), api('/sales')]);
+
+  const s = summary.totals;
+  document.getElementById('sales-summary').innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin-bottom:10px;">
+      <div class="info-card" style="flex-direction:column; align-items:flex-start;"><small>Total Revenue</small><h3 style="margin:4px 0 0;">${money(s.revenue)}</h3></div>
+      <div class="info-card" style="flex-direction:column; align-items:flex-start;"><small>Total Ingredient Cost</small><h3 style="margin:4px 0 0;">${money(s.cost)}</h3></div>
+      <div class="info-card" style="flex-direction:column; align-items:flex-start;"><small>Total Profit</small><h3 style="margin:4px 0 0; color:${s.profit >= 0 ? '#1F5F55' : '#c0392b'};">${money(s.profit)}</h3></div>
+      <div class="info-card" style="flex-direction:column; align-items:flex-start;"><small>Units Sold</small><h3 style="margin:4px 0 0;">${s.units}</h3></div>
+    </div>
+    ${summary.byProduct.length ? `<table style="margin-top:10px;"><tr><th>Product</th><th>Units</th><th>Revenue</th><th>Profit</th></tr>
+      ${summary.byProduct.map(p => `<tr><td>${escapeHtml(p.product_name)}</td><td>${p.units}</td><td>${money(p.revenue)}</td><td style="color:${p.profit>=0?'#1F5F55':'#c0392b'};">${money(p.profit)}</td></tr>`).join('')}
+    </table>` : ''}
+  `;
+
+  const list = document.getElementById('sales-list');
+  if (!rows.length) { list.innerHTML = '<div class="empty">No sales logged yet.</div>'; return; }
+  list.innerHTML = `<table><tr><th>Date</th><th>Product</th><th>Qty</th><th>Sale Price</th><th>Profit</th><th></th></tr>
+    ${rows.map(r => `<tr>
+      <td>${escapeHtml(r.sale_date)}</td>
+      <td>${escapeHtml(r.product_name)}</td>
+      <td>${r.quantity_sold}</td>
+      <td>${money(r.sale_price_per_unit)}</td>
+      <td style="color:${r.profit_total>=0?'#1F5F55':'#c0392b'}; font-weight:600;">${money(r.profit_total)}</td>
+      <td><button class="btn-danger" data-del="${r.id}">Delete</button></td>
+    </tr>`).join('')}
+  </table>`;
+  list.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this sale record?')) return;
+    try { await api('/sales/' + b.dataset.del, { method: 'DELETE' }); toast('Deleted'); renderSalesSub(); }
+    catch (err) { alert(err.message); }
+  });
+}
+
+async function saleForm() {
+  const products = await api('/products');
+  if (!products.length) {
+    alert('Add a product first (Products tab), then come back to log a sale.');
+    return;
+  }
+  const overlay = openModal(`
+    <h3>Log a Sale</h3>
+    <div class="field"><label>Product</label>
+      <select id="f-product">${products.map(p => `<option value="${p.id}" data-price="${p.selling_price}">${escapeHtml(p.name)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Quantity Sold</label><input type="number" step="1" id="f-qty" value="1"></div>
+    <div class="field"><label>Sale Price per Unit ($)</label><input type="number" step="0.01" id="f-price"></div>
+    <div class="field"><label>Date</label><input type="date" id="f-date" value="${new Date().toISOString().slice(0,10)}"></div>
+    <div class="field"><label>Notes (optional)</label><input id="f-notes" placeholder="e.g. birthday order for the Rahman family"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="cancel">Cancel</button>
+      <button class="btn-primary" id="save">Save Sale</button>
+    </div>
+  `);
+
+  const productSelect = overlay.querySelector('#f-product');
+  const priceInput = overlay.querySelector('#f-price');
+  const fillDefaultPrice = () => {
+    const opt = productSelect.options[productSelect.selectedIndex];
+    priceInput.value = opt.dataset.price;
+  };
+  fillDefaultPrice();
+  productSelect.addEventListener('change', fillDefaultPrice);
+
+  overlay.querySelector('#cancel').onclick = () => overlay.remove();
+  overlay.querySelector('#save').onclick = async () => {
+    try {
+      const payload = {
+        product_id: parseInt(productSelect.value, 10),
+        quantity_sold: parseFloat(overlay.querySelector('#f-qty').value),
+        sale_price_per_unit: parseFloat(priceInput.value),
+        sale_date: overlay.querySelector('#f-date').value,
+        notes: overlay.querySelector('#f-notes').value
+      };
+      await api('/sales', { method: 'POST', body: payload });
+      overlay.remove();
+      toast('Sale logged');
+      renderSalesSub();
+    } catch (err) { alert(err.message); }
+  };
 }
 
 // ================= Shared helpers =================

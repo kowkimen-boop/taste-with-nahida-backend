@@ -13,6 +13,9 @@ const uploadRoutes = require('./routes/uploads');
 const galleryRoutes = require('./routes/gallery');
 const contactRoutes = require('./routes/contact');
 const newsletterRoutes = require('./routes/newsletter');
+const ingredientRoutes = require('./routes/ingredients');
+const productRoutes = require('./routes/products');
+const salesRoutes = require('./routes/sales');
 
 const app = express();
 
@@ -45,6 +48,9 @@ app.use('/api/uploads', uploadRoutes);
 app.use('/api/gallery', galleryRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/newsletter', newsletterRoutes);
+app.use('/api/ingredients', ingredientRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/sales', salesRoutes);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
