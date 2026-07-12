@@ -7,7 +7,7 @@ const router = express.Router();
 router.use(requireAuth); // business data — admin only
 
 // Log a sale — snapshots the current cost-to-make so past profit stays accurate
-// even if ingredient prices change later.
+// even if ingredient prices change later. Also deducts the ingredients used from stock.
 router.post('/', async (req, res, next) => {
   try {
     const { product_id, quantity_sold, sale_price_per_unit, sale_date, notes } = req.body;
@@ -21,14 +21,36 @@ router.post('/', async (req, res, next) => {
     const costPerUnit = await getProductCost(db, product_id);
     const profitTotal = (sale_price_per_unit - costPerUnit) * quantity_sold;
 
+    // Figure out exactly how much of each ingredient this sale consumes,
+    // snapshot it on the sale record, deduct it from stock, and flag anything
+    // that goes at or below zero so the dashboard can warn about it.
+    const productIngredients = await db.all(
+      'SELECT ingredient_id, quantity FROM product_ingredients WHERE product_id = ?',
+      [product_id]
+    );
+    const stockWarnings = [];
+    const snapshot = [];
+    for (const pi of productIngredients) {
+      const usedQty = pi.quantity * quantity_sold;
+      snapshot.push({ ingredient_id: pi.ingredient_id, quantity: usedQty });
+      const ingredient = await db.get('SELECT * FROM ingredients WHERE id = ?', [pi.ingredient_id]);
+      if (ingredient) {
+        const newStock = ingredient.current_stock - usedQty;
+        await db.run('UPDATE ingredients SET current_stock = ? WHERE id = ?', [newStock, pi.ingredient_id]);
+        if (newStock <= 0) {
+          stockWarnings.push({ name: ingredient.name, remaining: newStock, unit: ingredient.unit });
+        }
+      }
+    }
+
     const info = await db.run(
-      `INSERT INTO sales (product_id, product_name, quantity_sold, sale_price_per_unit, cost_per_unit_snapshot, profit_total, sale_date, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [product_id, product.name, quantity_sold, sale_price_per_unit, costPerUnit, profitTotal, sale_date || new Date().toISOString().slice(0, 10), notes || '']
+      `INSERT INTO sales (product_id, product_name, quantity_sold, sale_price_per_unit, cost_per_unit_snapshot, profit_total, sale_date, notes, ingredients_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [product_id, product.name, quantity_sold, sale_price_per_unit, costPerUnit, profitTotal, sale_date || new Date().toISOString().slice(0, 10), notes || '', JSON.stringify(snapshot)]
     );
 
     const row = await db.get('SELECT * FROM sales WHERE id = ?', [info.lastInsertRowid]);
-    res.status(201).json(row);
+    res.status(201).json({ ...row, stockWarnings });
   } catch (err) { next(err); }
 });
 
@@ -70,8 +92,20 @@ router.get('/summary', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const info = await db.run('DELETE FROM sales WHERE id = ?', [req.params.id]);
-    if (info.changes === 0) return res.status(404).json({ error: 'Sale not found' });
+    const sale = await db.get('SELECT * FROM sales WHERE id = ?', [req.params.id]);
+    if (!sale) return res.status(404).json({ error: 'Sale not found' });
+
+    // Give back whatever stock this sale had consumed
+    if (sale.ingredients_snapshot) {
+      try {
+        const snapshot = JSON.parse(sale.ingredients_snapshot);
+        for (const item of snapshot) {
+          await db.run('UPDATE ingredients SET current_stock = current_stock + ? WHERE id = ?', [item.quantity, item.ingredient_id]);
+        }
+      } catch (e) { /* malformed/older snapshot — nothing to restore, safe to skip */ }
+    }
+
+    await db.run('DELETE FROM sales WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (err) { next(err); }
 });

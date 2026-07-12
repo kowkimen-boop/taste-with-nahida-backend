@@ -489,17 +489,23 @@ async function renderIngredientsSub() {
   const rows = await api('/ingredients');
   const list = document.getElementById('ingredients-list');
   if (!rows.length) { list.innerHTML = '<div class="empty">No ingredients yet — add flour, sugar, eggs, whatever she uses most.</div>'; return; }
-  list.innerHTML = `<table><tr><th>Name</th><th>Unit</th><th>Cost per unit</th><th></th></tr>
+  list.innerHTML = `<table><tr><th>Name</th><th>Unit</th><th>Stock on Hand</th><th>Cost/unit (latest)</th><th>Stock Value</th><th></th></tr>
     ${rows.map(i => `<tr>
       <td>${escapeHtml(i.name)}</td>
       <td>${escapeHtml(i.unit)}</td>
+      <td style="color:${i.current_stock <= 0 ? '#c0392b' : 'inherit'}; font-weight:${i.current_stock <= 0 ? '700' : '400'};">${i.current_stock}${i.current_stock <= 0 ? ' ⚠️' : ''}</td>
       <td>${money(i.cost_per_unit)}</td>
+      <td>${money(i.stock_value)}</td>
       <td>
+        <button class="btn-secondary" data-buy="${i.id}">+ Log Purchase</button>
+        <button class="btn-secondary" data-history="${i.id}">History</button>
         <button class="btn-secondary" data-edit="${i.id}">Edit</button>
         <button class="btn-danger" data-del="${i.id}">Delete</button>
       </td>
     </tr>`).join('')}
   </table>`;
+  list.querySelectorAll('[data-buy]').forEach(b => b.onclick = () => purchaseForm(rows.find(i => i.id == b.dataset.buy)));
+  list.querySelectorAll('[data-history]').forEach(b => b.onclick = () => purchaseHistory(rows.find(i => i.id == b.dataset.history)));
   list.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => ingredientForm(rows.find(i => i.id == b.dataset.edit)));
   list.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
     if (!confirm('Delete this ingredient?')) return;
@@ -513,8 +519,10 @@ function ingredientForm(existing) {
   const overlay = openModal(`
     <h3>${isEdit ? 'Edit' : 'Add'} Ingredient</h3>
     <div class="field"><label>Name</label><input id="f-name" placeholder="e.g. All-purpose flour" value="${existing ? escapeAttr(existing.name) : ''}"></div>
-    <div class="field"><label>Unit</label><input id="f-unit" placeholder="e.g. g, kg, pcs, cup" value="${existing ? escapeAttr(existing.unit) : ''}"></div>
-    <div class="field"><label>Cost per unit ($)</label><input type="number" step="0.001" id="f-cost" placeholder="e.g. 0.002 per gram" value="${existing ? existing.cost_per_unit : ''}"></div>
+    <div class="field"><label>Unit</label><input id="f-unit" placeholder="e.g. g, ml, pcs" value="${existing ? escapeAttr(existing.unit) : ''}"></div>
+    <div class="field"><label>${isEdit ? 'Cost per unit' : 'Opening cost per unit'}</label><input type="number" step="0.001" id="f-cost" placeholder="e.g. 0.08 per gram" value="${existing ? existing.cost_per_unit : ''}"></div>
+    <div class="field"><label>${isEdit ? 'Stock on hand (manual correction)' : 'Opening stock (how much she has right now)'}</label><input type="number" step="0.01" id="f-stock" placeholder="e.g. 1000" value="${existing ? existing.current_stock : '0'}"></div>
+    ${isEdit ? '<p style="font-size:.82rem; color:rgba(18,58,52,.6);">Tip: for normal restocking, use "Log Purchase" instead — it updates stock and cost together and keeps a history.</p>' : ''}
     <div class="modal-actions">
       <button class="btn-secondary" id="cancel">Cancel</button>
       <button class="btn-primary" id="save">Save</button>
@@ -526,7 +534,8 @@ function ingredientForm(existing) {
       const payload = {
         name: overlay.querySelector('#f-name').value,
         unit: overlay.querySelector('#f-unit').value,
-        cost_per_unit: parseFloat(overlay.querySelector('#f-cost').value)
+        cost_per_unit: parseFloat(overlay.querySelector('#f-cost').value),
+        current_stock: parseFloat(overlay.querySelector('#f-stock').value) || 0
       };
       if (isEdit) await api(`/ingredients/${existing.id}`, { method: 'PUT', body: payload });
       else await api('/ingredients', { method: 'POST', body: payload });
@@ -535,6 +544,87 @@ function ingredientForm(existing) {
       renderIngredientsSub();
     } catch (err) { alert(err.message); }
   };
+}
+
+function purchaseForm(ingredient) {
+  const overlay = openModal(`
+    <h3>Log Purchase — ${escapeHtml(ingredient.name)}</h3>
+    <p style="font-size:.85rem; color:rgba(18,58,52,.65);">Enter what she actually bought and paid. Stock and cost-per-unit update automatically.</p>
+    <div class="field"><label>Quantity purchased (in ${escapeHtml(ingredient.unit)})</label><input type="number" step="0.01" id="f-qty" placeholder="e.g. 12"></div>
+    <div class="field"><label>Total amount paid</label><input type="number" step="0.01" id="f-total"></div>
+    <div class="field"><label>Calculated cost per ${escapeHtml(ingredient.unit)}: <span id="unit-preview" style="font-weight:700;">—</span></label></div>
+    <div class="field"><label>Store (optional)</label><input id="f-store" placeholder="e.g. Shopno, local bazaar"></div>
+    <div class="field"><label>Date</label><input type="date" id="f-date" value="${new Date().toISOString().slice(0,10)}"></div>
+    <div class="field"><label>Notes (optional)</label><input id="f-notes"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="cancel">Cancel</button>
+      <button class="btn-primary" id="save">Save Purchase</button>
+    </div>
+  `);
+  const qtyInput = overlay.querySelector('#f-qty');
+  const totalInput = overlay.querySelector('#f-total');
+  const preview = overlay.querySelector('#unit-preview');
+  const updatePreview = () => {
+    const qty = parseFloat(qtyInput.value);
+    const total = parseFloat(totalInput.value);
+    preview.textContent = (qty > 0 && total >= 0) ? money(total / qty) : '—';
+  };
+  qtyInput.addEventListener('input', updatePreview);
+  totalInput.addEventListener('input', updatePreview);
+
+  overlay.querySelector('#cancel').onclick = () => overlay.remove();
+  overlay.querySelector('#save').onclick = async () => {
+    try {
+      const payload = {
+        ingredient_id: ingredient.id,
+        quantity: parseFloat(qtyInput.value),
+        total_cost: parseFloat(totalInput.value),
+        store: overlay.querySelector('#f-store').value,
+        purchase_date: overlay.querySelector('#f-date').value,
+        notes: overlay.querySelector('#f-notes').value
+      };
+      if (!payload.quantity || payload.total_cost === undefined || isNaN(payload.total_cost)) {
+        alert('Enter both quantity and total amount paid.');
+        return;
+      }
+      await api('/purchases', { method: 'POST', body: payload });
+      overlay.remove();
+      toast('Purchase logged — stock and cost updated');
+      renderIngredientsSub();
+    } catch (err) { alert(err.message); }
+  };
+}
+
+async function purchaseHistory(ingredient) {
+  const rows = await api('/purchases?ingredient_id=' + ingredient.id);
+  const overlay = openModal(`
+    <h3>Purchase History — ${escapeHtml(ingredient.name)}</h3>
+    ${!rows.length ? '<div class="empty">No purchases logged yet.</div>' : `
+      <table><tr><th>Date</th><th>Qty</th><th>Paid</th><th>Unit Cost</th><th>Store</th><th></th></tr>
+        ${rows.map(p => `<tr>
+          <td>${escapeHtml(p.purchase_date)}</td>
+          <td>${p.quantity}</td>
+          <td>${money(p.total_cost)}</td>
+          <td>${money(p.unit_cost)}</td>
+          <td>${escapeHtml(p.store || '—')}</td>
+          <td><button class="btn-danger" data-del="${p.id}">Delete</button></td>
+        </tr>`).join('')}
+      </table>
+    `}
+    <div class="modal-actions">
+      <button class="btn-secondary" id="close-history">Close</button>
+    </div>
+  `);
+  overlay.querySelector('#close-history').onclick = () => overlay.remove();
+  overlay.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this purchase? Stock and cost will be recalculated.')) return;
+    try {
+      await api('/purchases/' + b.dataset.del, { method: 'DELETE' });
+      overlay.remove();
+      toast('Purchase deleted');
+      renderIngredientsSub();
+    } catch (err) { alert(err.message); }
+  });
 }
 
 // ---------- Products ----------
@@ -584,7 +674,7 @@ async function productForm(existing) {
     <h3>${isEdit ? 'Edit' : 'Add'} Product</h3>
     <div class="field"><label>Name</label><input id="f-name" placeholder="e.g. Chocolate Birthday Cake" value="${existing ? escapeAttr(existing.name) : ''}"></div>
     <div class="field"><label>Category</label><input id="f-category" placeholder="e.g. Cake, Cupcake, Biryani" value="${existing ? escapeAttr(existing.category || '') : ''}"></div>
-    <div class="field"><label>Selling Price ($)</label><input type="number" step="0.01" id="f-price" value="${existing ? existing.selling_price : ''}"></div>
+    <div class="field"><label>Selling Price</label><input type="number" step="0.01" id="f-price" value="${existing ? existing.selling_price : ''}"></div>
     <div class="field"><label>Notes</label><textarea id="f-notes">${existing ? escapeHtml(existing.notes || '') : ''}</textarea></div>
     <div class="field">
       <label>Ingredients used (per 1 unit made)</label>
@@ -759,7 +849,7 @@ async function saleForm() {
       <select id="f-product">${products.map(p => `<option value="${p.id}" data-price="${p.selling_price}">${escapeHtml(p.name)}</option>`).join('')}</select>
     </div>
     <div class="field"><label>Quantity Sold</label><input type="number" step="1" id="f-qty" value="1"></div>
-    <div class="field"><label>Sale Price per Unit ($)</label><input type="number" step="0.01" id="f-price"></div>
+    <div class="field"><label>Sale Price per Unit</label><input type="number" step="0.01" id="f-price"></div>
     <div class="field"><label>Date</label><input type="date" id="f-date" value="${new Date().toISOString().slice(0,10)}"></div>
     <div class="field"><label>Notes (optional)</label><input id="f-notes" placeholder="e.g. birthday order for the Rahman family"></div>
     <div class="modal-actions">
@@ -787,10 +877,16 @@ async function saleForm() {
         sale_date: overlay.querySelector('#f-date').value,
         notes: overlay.querySelector('#f-notes').value
       };
-      await api('/sales', { method: 'POST', body: payload });
-      overlay.remove();
-      toast('Sale logged');
-      renderSalesSub();
+      await api('/sales', { method: 'POST', body: payload }).then(result => {
+        overlay.remove();
+        if (result.stockWarnings && result.stockWarnings.length) {
+          const list = result.stockWarnings.map(w => `${w.name} (${w.remaining} ${w.unit} left)`).join(', ');
+          toast(`Sale logged. Low stock: ${list}`);
+        } else {
+          toast('Sale logged');
+        }
+        renderSalesSub();
+      });
     } catch (err) { alert(err.message); }
   };
 }

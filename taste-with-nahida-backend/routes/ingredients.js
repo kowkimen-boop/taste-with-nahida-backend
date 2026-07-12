@@ -7,40 +7,54 @@ const router = express.Router();
 // All ingredient routes are admin-only — this is business data, not public content.
 router.use(requireAuth);
 
+function withStockValue(row) {
+  return { ...row, stock_value: row.current_stock * row.cost_per_unit };
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const rows = await db.all('SELECT * FROM ingredients ORDER BY name ASC');
-    res.json(rows);
+    res.json(rows.map(withStockValue));
   } catch (err) { next(err); }
 });
 
+// Opening/manual entry — creates the ingredient with a starting stock and cost.
+// Ongoing cost updates should normally happen through logging a purchase instead.
 router.post('/', async (req, res, next) => {
   try {
-    const { name, unit, cost_per_unit } = req.body;
+    const { name, unit, cost_per_unit, current_stock } = req.body;
     if (!name || !unit || cost_per_unit === undefined) {
       return res.status(400).json({ error: 'name, unit, and cost_per_unit are required' });
     }
     const info = await db.run(
-      'INSERT INTO ingredients (name, unit, cost_per_unit) VALUES (?, ?, ?)',
-      [name, unit, cost_per_unit]
+      'INSERT INTO ingredients (name, unit, cost_per_unit, current_stock) VALUES (?, ?, ?, ?)',
+      [name, unit, cost_per_unit, current_stock || 0]
     );
     const row = await db.get('SELECT * FROM ingredients WHERE id = ?', [info.lastInsertRowid]);
-    res.status(201).json(row);
+    res.status(201).json(withStockValue(row));
   } catch (err) { next(err); }
 });
 
+// Manual correction only (name/unit, or a manual stock/cost override if needed).
+// Prefer logging a purchase (routes/purchases.js) for normal restocking.
 router.put('/:id', async (req, res, next) => {
   try {
     const existing = await db.get('SELECT * FROM ingredients WHERE id = ?', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Ingredient not found' });
 
-    const { name, unit, cost_per_unit } = req.body;
+    const { name, unit, cost_per_unit, current_stock } = req.body;
     await db.run(
-      `UPDATE ingredients SET name = ?, unit = ?, cost_per_unit = ?, updated_at = datetime('now') WHERE id = ?`,
-      [name ?? existing.name, unit ?? existing.unit, cost_per_unit ?? existing.cost_per_unit, req.params.id]
+      `UPDATE ingredients SET name = ?, unit = ?, cost_per_unit = ?, current_stock = ?, updated_at = datetime('now') WHERE id = ?`,
+      [
+        name ?? existing.name,
+        unit ?? existing.unit,
+        cost_per_unit ?? existing.cost_per_unit,
+        current_stock ?? existing.current_stock,
+        req.params.id
+      ]
     );
     const row = await db.get('SELECT * FROM ingredients WHERE id = ?', [req.params.id]);
-    res.json(row);
+    res.json(withStockValue(row));
   } catch (err) { next(err); }
 });
 

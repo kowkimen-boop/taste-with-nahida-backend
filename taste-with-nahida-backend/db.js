@@ -129,7 +129,30 @@ async function initSchema() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+      quantity REAL NOT NULL,
+      total_cost REAL NOT NULL,
+      unit_cost REAL NOT NULL,
+      store TEXT,
+      purchase_date TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
   `);
+
+  // Safe migrations for columns added after the tables already existed in production.
+  // SQLite/libSQL don't support "ADD COLUMN IF NOT EXISTS", so we try and ignore the
+  // "duplicate column" error if it's already been applied.
+  const migrations = [
+    "ALTER TABLE ingredients ADD COLUMN current_stock REAL DEFAULT 0",
+    "ALTER TABLE sales ADD COLUMN ingredients_snapshot TEXT"
+  ];
+  for (const sql of migrations) {
+    try { await client.execute(sql); } catch (err) { /* column already exists — safe to ignore */ }
+  }
 }
 
 async function ensureDefaultSettings() {
