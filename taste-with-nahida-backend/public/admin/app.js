@@ -9,7 +9,7 @@ const appView = document.getElementById('app-view');
 function showApp() {
   loginView.style.display = 'none';
   appView.style.display = 'flex';
-  loadTab('recipes');
+  loadSettings().then(() => loadTab('recipes'));
 }
 function showLogin() {
   appView.style.display = 'none';
@@ -399,10 +399,12 @@ async function renderSubscribers() {
 let businessSubTab = 'products';
 
 async function renderBusiness() {
+  await loadSettings();
   const el = document.getElementById('tab-business');
   el.innerHTML = `
     <div class="tab-head">
       <h2>Business</h2>
+      <button class="btn-secondary" id="change-currency">Currency: ${CURRENCY_SYMBOL} — Change</button>
     </div>
     <div class="filter-row" style="justify-content:flex-start; margin-bottom:20px;">
       <button class="filter-chip biz-sub ${businessSubTab === 'products' ? 'active' : ''}" data-sub="products">Products</button>
@@ -411,6 +413,7 @@ async function renderBusiness() {
     </div>
     <div id="biz-content">Loading…</div>
   `;
+  el.querySelector('#change-currency').onclick = () => currencyForm();
   el.querySelectorAll('.biz-sub').forEach(btn => btn.onclick = () => {
     businessSubTab = btn.dataset.sub;
     renderBusiness();
@@ -421,8 +424,42 @@ async function renderBusiness() {
   else await renderProductsSub();
 }
 
+function currencyForm() {
+  const overlay = openModal(`
+    <h3>Change Currency</h3>
+    <p style="color:rgba(18,58,52,.7); font-size:.9rem;">This changes how amounts are displayed everywhere in the dashboard — past numbers aren't converted, just relabeled. Switch back anytime, e.g. when Muna moves to the US.</p>
+    <div class="field"><label>Symbol</label><input id="f-symbol" value="${CURRENCY_SYMBOL}" placeholder="e.g. ৳, $, £, €"></div>
+    <div class="field"><label>Currency code (optional label)</label><input id="f-code" placeholder="e.g. BDT, USD"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="cancel">Cancel</button>
+      <button class="btn-primary" id="save">Save</button>
+    </div>
+  `);
+  overlay.querySelector('#cancel').onclick = () => overlay.remove();
+  overlay.querySelector('#save').onclick = async () => {
+    try {
+      await api('/settings', { method: 'PUT', body: {
+        currency_symbol: overlay.querySelector('#f-symbol').value,
+        currency_code: overlay.querySelector('#f-code').value
+      }});
+      overlay.remove();
+      toast('Currency updated');
+      renderBusiness();
+    } catch (err) { alert(err.message); }
+  };
+}
+
+let CURRENCY_SYMBOL = '৳'; // updated from server settings once loaded
+
+async function loadSettings() {
+  try {
+    const settings = await fetch(`${API}/settings`).then(r => r.json());
+    if (settings.currency_symbol) CURRENCY_SYMBOL = settings.currency_symbol;
+  } catch (err) { /* fall back to default symbol */ }
+}
+
 function money(n) {
-  return '$' + (Math.round((n + Number.EPSILON) * 100) / 100).toFixed(2);
+  return CURRENCY_SYMBOL + (Math.round((n + Number.EPSILON) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ---------- Ingredients ----------
@@ -616,7 +653,7 @@ async function productForm(existing) {
 // ---------- Sales ----------
 async function renderSalesSub() {
   const box = document.getElementById('biz-content');
-  box.innerHTML = `<div class="tab-head"><h3 style="margin:0;">Sales &amp; Profit</h3><button class="btn-primary" id="log-sale">+ Log a Sale</button></div><div id="sales-summary"></div><div id="sales-list" style="margin-top:24px;">Loading…</div>`;
+  box.innerHTML = `<div class="tab-head"><h3 style="margin:0;">Sales &amp; Profit</h3><button class="btn-primary" id="log-sale">+ Log a Sale</button></div><div id="sales-summary"></div><div id="monthly-report" style="margin-top:32px;"></div><div id="sales-list" style="margin-top:24px;">Loading…</div>`;
   document.getElementById('log-sale').onclick = () => saleForm();
 
   const [summary, rows] = await Promise.all([api('/sales/summary'), api('/sales')]);
@@ -634,9 +671,11 @@ async function renderSalesSub() {
     </table>` : ''}
   `;
 
+  await renderMonthlyReport();
+
   const list = document.getElementById('sales-list');
   if (!rows.length) { list.innerHTML = '<div class="empty">No sales logged yet.</div>'; return; }
-  list.innerHTML = `<table><tr><th>Date</th><th>Product</th><th>Qty</th><th>Sale Price</th><th>Profit</th><th></th></tr>
+  list.innerHTML = `<h3>All Sales</h3><table><tr><th>Date</th><th>Product</th><th>Qty</th><th>Sale Price</th><th>Profit</th><th></th></tr>
     ${rows.map(r => `<tr>
       <td>${escapeHtml(r.sale_date)}</td>
       <td>${escapeHtml(r.product_name)}</td>
@@ -651,6 +690,42 @@ async function renderSalesSub() {
     try { await api('/sales/' + b.dataset.del, { method: 'DELETE' }); toast('Deleted'); renderSalesSub(); }
     catch (err) { alert(err.message); }
   });
+}
+
+async function renderMonthlyReport(selectedYear) {
+  const box = document.getElementById('monthly-report');
+  const years = await api('/sales/years');
+  const year = selectedYear || years[0] || String(new Date().getFullYear());
+  const data = await api(`/sales/monthly?year=${year}`);
+
+  box.innerHTML = `
+    <div class="tab-head">
+      <h3 style="margin:0;">Monthly Report</h3>
+      <select id="year-picker" style="padding:8px 12px; border-radius:8px; border:1.5px solid var(--border);">
+        ${years.map(y => `<option value="${y}" ${y == year ? 'selected' : ''}>${y}</option>`).join('')}
+      </select>
+    </div>
+    <table>
+      <tr><th>Month</th><th>Units Sold</th><th>Revenue</th><th>Cost</th><th>Profit</th></tr>
+      ${data.months.map(m => `
+        <tr style="${m.saleCount === 0 ? 'opacity:.45;' : ''}">
+          <td>${m.name}</td>
+          <td>${m.units}</td>
+          <td>${money(m.revenue)}</td>
+          <td>${money(m.cost)}</td>
+          <td style="color:${m.profit>=0?'#1F5F55':'#c0392b'}; font-weight:600;">${money(m.profit)}</td>
+        </tr>
+      `).join('')}
+      <tr style="background:#EAF6F1; font-weight:700;">
+        <td>Year Total (${year})</td>
+        <td>${data.yearTotal.units}</td>
+        <td>${money(data.yearTotal.revenue)}</td>
+        <td>${money(data.yearTotal.cost)}</td>
+        <td style="color:${data.yearTotal.profit>=0?'#1F5F55':'#c0392b'};">${money(data.yearTotal.profit)}</td>
+      </tr>
+    </table>
+  `;
+  box.querySelector('#year-picker').addEventListener('change', (e) => renderMonthlyReport(e.target.value));
 }
 
 async function saleForm() {

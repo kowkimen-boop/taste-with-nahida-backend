@@ -1,186 +1,129 @@
-require('dotenv').config();
-const { createClient } = require('@libsql/client');
-const bcrypt = require('bcryptjs');
+# Taste with Nahida — Backend
 
-// If TURSO_DATABASE_URL is not set, falls back to a local file database
-// (great for local development without a Turso account yet).
-const url = process.env.TURSO_DATABASE_URL || 'file:local.db';
-const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
+A Node.js + Express backend for the Taste with Nahida website, built on **Turso** (a free, hosted, persistent SQLite-compatible database) and **Cloudinary** (free image hosting) — so your content and photos survive redeploys on free hosting like Render, instead of disappearing when the server restarts.
 
-if (!process.env.TURSO_DATABASE_URL) {
-  console.log('ℹ No TURSO_DATABASE_URL set — using a local file database (local.db). Data will not sync to Turso.');
-}
+It gives you:
 
-const client = createClient(authToken ? { url, authToken } : { url });
+- 🔐 Admin login (JWT-based)
+- 🍛 Recipes, 🍽 Reviews, ✈️ Travel Blog posts — full create/edit/delete
+- 📸 Image uploads (stored on Cloudinary, so they persist)
+- 📞 A real, working contact form (saves to the database + optional email notification)
+- 📧 Newsletter sign-ups (saved to the database, exportable as CSV)
+- 🖥 A simple admin dashboard at `/admin` to manage all of the above without touching code
 
-// ---------- Schema ----------
-async function initSchema() {
-  await client.executeMultiple(`
-    CREATE TABLE IF NOT EXISTS admins (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+---
 
-    CREATE TABLE IF NOT EXISTS recipes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      slug TEXT UNIQUE NOT NULL,
-      category TEXT NOT NULL,
-      summary TEXT,
-      ingredients TEXT,
-      steps TEXT,
-      image_url TEXT,
-      published INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
+## 1. Create your free Turso database
 
-    CREATE TABLE IF NOT EXISTS reviews (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      restaurant_name TEXT NOT NULL,
-      slug TEXT UNIQUE NOT NULL,
-      country TEXT NOT NULL,
-      location TEXT,
-      rating REAL NOT NULL CHECK(rating >= 0 AND rating <= 5),
-      body TEXT,
-      image_url TEXT,
-      published INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
+1. Go to [turso.tech](https://turso.tech) and sign up (free, no credit card).
+2. Create a database (any name, e.g. `taste-with-nahida`).
+3. Open its "Connect" tab — copy the **Database URL** (starts with `libsql://...`) and generate an **Auth Token**.
 
-    CREATE TABLE IF NOT EXISTS blog_posts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      slug TEXT UNIQUE NOT NULL,
-      country TEXT,
-      body TEXT,
-      image_url TEXT,
-      published INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
+You'll paste both into `.env` in step 3 below. If you skip this step entirely, the backend automatically falls back to a local SQLite file (`local.db`) so you can still develop locally — it just won't be the persistent version yet.
 
-    CREATE TABLE IF NOT EXISTS gallery_images (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      image_url TEXT NOT NULL,
-      caption TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+## 2. Create your free Cloudinary account (for photos)
 
-    CREATE TABLE IF NOT EXISTS contact_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      subject TEXT,
-      message TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      read INTEGER DEFAULT 0
-    );
+1. Go to [cloudinary.com](https://cloudinary.com) and sign up (free tier: 25GB storage).
+2. On your Dashboard, copy the **Cloud name**, **API Key**, and **API Secret**.
 
-    CREATE TABLE IF NOT EXISTS newsletter_subscribers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+If you skip this step, uploaded images fall back to being saved on local disk — fine for testing, but not persistent on most free hosts.
 
-    CREATE TABLE IF NOT EXISTS ingredients (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      unit TEXT NOT NULL,
-      cost_per_unit REAL NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
+## 3. Local setup
 
-    CREATE TABLE IF NOT EXISTS products (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      category TEXT,
-      selling_price REAL NOT NULL,
-      notes TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
+**Requirements:** Node.js 18 or newer.
 
-    CREATE TABLE IF NOT EXISTS product_ingredients (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      ingredient_id INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
-      quantity REAL NOT NULL
-    );
+```bash
+cd taste-with-nahida-backend
+npm install
+cp .env.example .env
+```
 
-    CREATE TABLE IF NOT EXISTS sales (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL REFERENCES products(id),
-      product_name TEXT NOT NULL,
-      quantity_sold REAL NOT NULL,
-      sale_price_per_unit REAL NOT NULL,
-      cost_per_unit_snapshot REAL NOT NULL,
-      profit_total REAL NOT NULL,
-      sale_date TEXT NOT NULL,
-      notes TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+Open `.env` and fill in:
+- `JWT_SECRET` — any long random string
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD` — your login for `/admin`
+- `ALLOWED_ORIGINS` — the URL(s) your frontend runs on
+- `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` — from step 1
+- `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` — from step 2
 
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-  `);
-}
+Then start the server:
 
-async function ensureDefaultSettings() {
-  const existing = await client.execute('SELECT key FROM settings WHERE key = ?', ['currency_symbol']);
-  if (existing.rows.length === 0) {
-    await client.execute({ sql: 'INSERT INTO settings (key, value) VALUES (?, ?)', args: ['currency_symbol', '৳'] });
-    await client.execute({ sql: 'INSERT INTO settings (key, value) VALUES (?, ?)', args: ['currency_code', 'BDT'] });
-  }
-}
+```bash
+npm start
+```
 
-// ---------- Seed the admin user from .env, if not already present ----------
-async function ensureAdmin() {
-  const email = (process.env.ADMIN_EMAIL || 'admin@tastewithnahida.com').toLowerCase();
-  const existing = await client.execute({ sql: 'SELECT id FROM admins WHERE email = ?', args: [email] });
-  if (existing.rows.length === 0) {
-    const rawPassword = process.env.ADMIN_PASSWORD || 'changeme123';
-    const hash = bcrypt.hashSync(rawPassword, 10);
-    await client.execute({ sql: 'INSERT INTO admins (email, password_hash) VALUES (?, ?)', args: [email, hash] });
-    console.log(`✔ Admin account created: ${email}`);
-  }
-}
+You should see:
+```
+🍛 Taste with Nahida API running on http://localhost:4000
+   Admin dashboard:  http://localhost:4000/admin
+   Health check:     http://localhost:4000/api/health
+```
 
-let readyPromise = null;
-function ready() {
-  if (!readyPromise) {
-    readyPromise = initSchema().then(ensureAdmin).then(ensureDefaultSettings);
-  }
-  return readyPromise;
-}
+Optional — load some starter content (matches what's on the current frontend):
+```bash
+npm run seed
+```
 
-// ---------- Query helpers (mimic the old better-sqlite3-style API, but async) ----------
-function toPlainRows(rs) {
-  return rs.rows.map(row => ({ ...row }));
-}
+## 4. Log in to the admin dashboard
 
-async function all(sql, args = []) {
-  const rs = await client.execute({ sql, args });
-  return toPlainRows(rs);
-}
+Visit `http://localhost:4000/admin`, log in with your `ADMIN_EMAIL` / `ADMIN_PASSWORD`, and you can immediately:
+- Add/edit/delete recipes, reviews, and travel posts
+- Upload images (they go straight to Cloudinary if configured)
+- Read contact form submissions
+- View and export newsletter subscribers to CSV
 
-async function get(sql, args = []) {
-  const rows = await all(sql, args);
-  return rows[0] || null;
-}
+## 5. Connect your frontend
 
-async function run(sql, args = []) {
-  const rs = await client.execute({ sql, args });
-  return {
-    lastInsertRowid: rs.lastInsertRowid !== undefined ? Number(rs.lastInsertRowid) : undefined,
-    changes: rs.rowsAffected
-  };
-}
+Open `js/script.js` in the frontend project and set `API_BASE` near the top:
 
-module.exports = { client, ready, all, get, run };
+- **While developing locally:** `API_BASE = 'http://localhost:4000/api'`
+- **Once deployed:** `API_BASE = 'https://your-backend-url.onrender.com/api'`
+
+## 6. Email notifications for the contact form (optional)
+
+The contact form works and saves messages to the database even without email configured. To also get an email when someone writes in:
+
+1. Fill in `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and `CONTACT_TO_EMAIL` in `.env`.
+2. For Gmail: turn on 2-Step Verification, then create an "App Password" and use that as `SMTP_PASS`.
+3. Restart the server.
+
+## 7. Deploying for free
+
+1. Push this folder to its own GitHub repo.
+2. On [render.com](https://render.com), create a new **Web Service**, connect that repo, and set:
+   - Build command: `npm install`
+   - Start command: `npm start`
+3. Add all the same variables from your `.env` file under Render's **Environment** tab (don't upload `.env` itself — it's gitignored).
+4. Deploy. Because your data now lives in Turso and your images in Cloudinary, Render's free tier sleeping/redeploying won't wipe anything — only the server process restarts, not your content.
+
+**Note:** Render's free web services sleep after 15 minutes of inactivity and take 30–60 seconds to wake up on the next request. That's normal and fine for a personal site; it just means the very first visitor after a quiet period waits a bit.
+
+## 8. API reference (quick summary)
+
+All write endpoints (`POST`/`PUT`/`DELETE`) require a header: `Authorization: Bearer <token>` from `/api/auth/login`.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/auth/login` | — | Get a JWT token |
+| GET | `/api/recipes` | — | List published recipes (`?category=`) |
+| POST/PUT/DELETE | `/api/recipes` | ✅ | Manage recipes |
+| GET | `/api/reviews` | — | List published reviews (`?country=`) |
+| POST/PUT/DELETE | `/api/reviews` | ✅ | Manage reviews |
+| GET | `/api/blog` | — | List published travel posts |
+| POST/PUT/DELETE | `/api/blog` | ✅ | Manage travel posts |
+| GET | `/api/gallery` | — | List gallery images |
+| POST | `/api/uploads` | ✅ | Upload an image (`multipart/form-data`, field `image`) |
+| POST | `/api/contact` | — | Submit the contact form |
+| GET | `/api/contact` | ✅ | View messages |
+| POST | `/api/newsletter` | — | Subscribe an email |
+| GET | `/api/newsletter` | ✅ | View subscribers |
+| GET | `/api/newsletter/export.csv` | ✅ | Download subscribers as CSV |
+
+## 9. What's next (not built yet)
+
+- Online ordering / payments
+- Customer accounts
+- Full-text recipe search
+- Comments and star ratings from visitors
+
+These are bigger features involving payment processors and/or user accounts — happy to help design and build any of them when you're ready.
+

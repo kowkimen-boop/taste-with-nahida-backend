@@ -76,4 +76,44 @@ router.delete('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+// List of years that have at least one sale — used to populate the report's year picker
+router.get('/years', async (req, res, next) => {
+  try {
+    const rows = await db.all('SELECT sale_date FROM sales');
+    const years = [...new Set(rows.map(r => r.sale_date.slice(0, 4)))].sort((a, b) => b - a);
+    const currentYear = String(new Date().getFullYear());
+    if (!years.includes(currentYear)) years.unshift(currentYear);
+    res.json(years);
+  } catch (err) { next(err); }
+});
+
+// Month-by-month breakdown for a given year, plus the end-of-year total
+router.get('/monthly', async (req, res, next) => {
+  try {
+    const year = String(req.query.year || new Date().getFullYear());
+    const rows = await db.all('SELECT * FROM sales WHERE sale_date LIKE ?', [`${year}-%`]);
+
+    const months = MONTH_NAMES.map((name, idx) => {
+      const monthNum = String(idx + 1).padStart(2, '0');
+      const monthRows = rows.filter(r => r.sale_date.slice(5, 7) === monthNum);
+      const revenue = monthRows.reduce((s, r) => s + r.quantity_sold * r.sale_price_per_unit, 0);
+      const cost = monthRows.reduce((s, r) => s + r.quantity_sold * r.cost_per_unit_snapshot, 0);
+      const profit = monthRows.reduce((s, r) => s + r.profit_total, 0);
+      const units = monthRows.reduce((s, r) => s + r.quantity_sold, 0);
+      return { month: idx + 1, name, revenue, cost, profit, units, saleCount: monthRows.length };
+    });
+
+    const yearTotal = months.reduce((acc, m) => ({
+      revenue: acc.revenue + m.revenue,
+      cost: acc.cost + m.cost,
+      profit: acc.profit + m.profit,
+      units: acc.units + m.units
+    }), { revenue: 0, cost: 0, profit: 0, units: 0 });
+
+    res.json({ year, months, yearTotal });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
