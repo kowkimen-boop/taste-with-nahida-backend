@@ -70,6 +70,24 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2600);
 }
 
+// ---------------- Mobile sidebar toggle ----------------
+const sidebar = document.getElementById('sidebar');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+const menuToggle = document.getElementById('menu-toggle');
+
+function closeSidebar() {
+  sidebar.classList.remove('open');
+  sidebarBackdrop.classList.remove('open');
+}
+function openSidebar() {
+  sidebar.classList.add('open');
+  sidebarBackdrop.classList.add('open');
+}
+if (menuToggle) menuToggle.addEventListener('click', () => {
+  sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+});
+if (sidebarBackdrop) sidebarBackdrop.addEventListener('click', closeSidebar);
+
 // ---------------- Tabs ----------------
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -78,6 +96,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.querySelectorAll('.tab').forEach(t => t.style.display = 'none');
     document.getElementById(`tab-${btn.dataset.tab}`).style.display = 'block';
     loadTab(btn.dataset.tab);
+    closeSidebar();
   });
 });
 

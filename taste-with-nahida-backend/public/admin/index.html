@@ -23,7 +23,13 @@
 
 <!-- DASHBOARD VIEW -->
 <div id="app-view" class="app-wrap" style="display:none;">
-  <aside class="sidebar">
+  <div class="mobile-topbar">
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <h2>🍛 Taste with Nahida</h2>
+    <span style="width:28px;"></span>
+  </div>
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+  <aside class="sidebar" id="sidebar">
     <h2>🍛 Taste with Nahida</h2>
     <nav>
       <button class="nav-btn active" data-tab="recipes">🍛 Recipes</button>
