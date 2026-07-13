@@ -22,13 +22,13 @@ router.get('/', async (req, res, next) => {
 // Ongoing cost updates should normally happen through logging a purchase instead.
 router.post('/', async (req, res, next) => {
   try {
-    const { name, unit, cost_per_unit, current_stock } = req.body;
+    const { name, unit, cost_per_unit, current_stock, purchase_unit, purchase_ratio } = req.body;
     if (!name || !unit || cost_per_unit === undefined) {
       return res.status(400).json({ error: 'name, unit, and cost_per_unit are required' });
     }
     const info = await db.run(
-      'INSERT INTO ingredients (name, unit, cost_per_unit, current_stock) VALUES (?, ?, ?, ?)',
-      [name, unit, cost_per_unit, current_stock || 0]
+      'INSERT INTO ingredients (name, unit, cost_per_unit, current_stock, purchase_unit, purchase_ratio) VALUES (?, ?, ?, ?, ?, ?)',
+      [name, unit, cost_per_unit, current_stock || 0, purchase_unit || unit, purchase_ratio || 1]
     );
     const row = await db.get('SELECT * FROM ingredients WHERE id = ?', [info.lastInsertRowid]);
     res.status(201).json(withStockValue(row));
@@ -42,14 +42,16 @@ router.put('/:id', async (req, res, next) => {
     const existing = await db.get('SELECT * FROM ingredients WHERE id = ?', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Ingredient not found' });
 
-    const { name, unit, cost_per_unit, current_stock } = req.body;
+    const { name, unit, cost_per_unit, current_stock, purchase_unit, purchase_ratio } = req.body;
     await db.run(
-      `UPDATE ingredients SET name = ?, unit = ?, cost_per_unit = ?, current_stock = ?, updated_at = datetime('now') WHERE id = ?`,
+      `UPDATE ingredients SET name = ?, unit = ?, cost_per_unit = ?, current_stock = ?, purchase_unit = ?, purchase_ratio = ?, updated_at = datetime('now') WHERE id = ?`,
       [
         name ?? existing.name,
         unit ?? existing.unit,
         cost_per_unit ?? existing.cost_per_unit,
         current_stock ?? existing.current_stock,
+        purchase_unit ?? existing.purchase_unit,
+        purchase_ratio ?? existing.purchase_ratio,
         req.params.id
       ]
     );

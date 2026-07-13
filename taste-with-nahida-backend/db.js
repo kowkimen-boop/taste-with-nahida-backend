@@ -148,11 +148,20 @@ async function initSchema() {
   // "duplicate column" error if it's already been applied.
   const migrations = [
     "ALTER TABLE ingredients ADD COLUMN current_stock REAL DEFAULT 0",
-    "ALTER TABLE sales ADD COLUMN ingredients_snapshot TEXT"
+    "ALTER TABLE sales ADD COLUMN ingredients_snapshot TEXT",
+    "ALTER TABLE ingredients ADD COLUMN purchase_unit TEXT",
+    "ALTER TABLE ingredients ADD COLUMN purchase_ratio REAL DEFAULT 1",
+    "ALTER TABLE purchases ADD COLUMN purchase_quantity REAL",
+    "ALTER TABLE purchases ADD COLUMN purchase_unit_label TEXT"
   ];
   for (const sql of migrations) {
     try { await client.execute(sql); } catch (err) { /* column already exists — safe to ignore */ }
   }
+
+  // Backfill: ingredients created before purchase-unit support existed should default
+  // to "purchase unit = usage unit, 1:1" so nothing breaks.
+  await client.execute("UPDATE ingredients SET purchase_unit = unit WHERE purchase_unit IS NULL");
+  await client.execute("UPDATE ingredients SET purchase_ratio = 1 WHERE purchase_ratio IS NULL");
 }
 
 async function ensureDefaultSettings() {

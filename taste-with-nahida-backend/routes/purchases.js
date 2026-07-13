@@ -7,6 +7,8 @@ router.use(requireAuth); // business data — admin only
 
 // Log a purchase: adds to stock, and updates the ingredient's cost to this
 // purchase's price (since we track "most recent purchase price", not an average).
+// The person enters the quantity in the ingredient's *purchase* unit (e.g. kg),
+// which gets converted to the *usage* unit (e.g. g) using purchase_ratio.
 router.post('/', async (req, res, next) => {
   try {
     const { ingredient_id, quantity, total_cost, store, purchase_date, notes } = req.body;
@@ -17,18 +19,20 @@ router.post('/', async (req, res, next) => {
     const ingredient = await db.get('SELECT * FROM ingredients WHERE id = ?', [ingredient_id]);
     if (!ingredient) return res.status(404).json({ error: 'Ingredient not found' });
 
-    const unitCost = total_cost / quantity;
+    const ratio = ingredient.purchase_ratio || 1;
+    const quantityInUsageUnits = quantity * ratio; // e.g. 1 kg * 1000 = 1000 g
+    const unitCost = total_cost / quantityInUsageUnits; // cost per usage unit (e.g. per gram)
     const date = purchase_date || new Date().toISOString().slice(0, 10);
 
     const info = await db.run(
-      `INSERT INTO purchases (ingredient_id, quantity, total_cost, unit_cost, store, purchase_date, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [ingredient_id, quantity, total_cost, unitCost, store || '', date, notes || '']
+      `INSERT INTO purchases (ingredient_id, quantity, total_cost, unit_cost, store, purchase_date, notes, purchase_quantity, purchase_unit_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [ingredient_id, quantityInUsageUnits, total_cost, unitCost, store || '', date, notes || '', quantity, ingredient.purchase_unit || ingredient.unit]
     );
 
     await db.run(
       `UPDATE ingredients SET current_stock = current_stock + ?, cost_per_unit = ?, updated_at = datetime('now') WHERE id = ?`,
-      [quantity, unitCost, ingredient_id]
+      [quantityInUsageUnits, unitCost, ingredient_id]
     );
 
     const updatedIngredient = await db.get('SELECT * FROM ingredients WHERE id = ?', [ingredient_id]);

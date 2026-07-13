@@ -519,9 +519,12 @@ function ingredientForm(existing) {
   const overlay = openModal(`
     <h3>${isEdit ? 'Edit' : 'Add'} Ingredient</h3>
     <div class="field"><label>Name</label><input id="f-name" placeholder="e.g. All-purpose flour" value="${existing ? escapeAttr(existing.name) : ''}"></div>
-    <div class="field"><label>Unit</label><input id="f-unit" placeholder="e.g. g, ml, pcs" value="${existing ? escapeAttr(existing.unit) : ''}"></div>
-    <div class="field"><label>${isEdit ? 'Cost per unit' : 'Opening cost per unit'}</label><input type="number" step="0.001" id="f-cost" placeholder="e.g. 0.08 per gram" value="${existing ? existing.cost_per_unit : ''}"></div>
-    <div class="field"><label>${isEdit ? 'Stock on hand (manual correction)' : 'Opening stock (how much she has right now)'}</label><input type="number" step="0.01" id="f-stock" placeholder="e.g. 1000" value="${existing ? existing.current_stock : '0'}"></div>
+    <div class="field"><label>Recipe unit (what quantities in a recipe are measured in)</label><input id="f-unit" placeholder="e.g. g, ml, pcs" value="${existing ? escapeAttr(existing.unit) : ''}"></div>
+    <div class="field"><label>Purchase unit (what she actually buys it in)</label><input id="f-punit" placeholder="e.g. kg, L, dozen — leave blank if same as recipe unit" value="${existing ? escapeAttr(existing.purchase_unit || '') : ''}"></div>
+    <div class="field"><label>1 purchase unit = how many recipe units?</label><input type="number" step="0.001" id="f-ratio" placeholder="e.g. 1 kg = 1000 g, so enter 1000" value="${existing ? existing.purchase_ratio : '1'}"></div>
+    <p style="font-size:.8rem; color:rgba(18,58,52,.55); margin-top:-8px;">Examples: buys flour by the kg but recipes use grams → purchase unit "kg", ratio 1000. Buys eggs by the dozen but recipes use single eggs → purchase unit "dozen", ratio 12. Buys and uses in the same unit → leave purchase unit blank, ratio 1.</p>
+    <div class="field"><label>${isEdit ? 'Cost per ' + (existing ? escapeAttr(existing.unit) : 'recipe unit') : 'Opening cost per recipe unit'}</label><input type="number" step="0.001" id="f-cost" placeholder="e.g. 0.08" value="${existing ? existing.cost_per_unit : ''}"></div>
+    <div class="field"><label>${isEdit ? 'Stock on hand (manual correction, in recipe units)' : 'Opening stock (in recipe units)'}</label><input type="number" step="0.01" id="f-stock" placeholder="e.g. 1000" value="${existing ? existing.current_stock : '0'}"></div>
     ${isEdit ? '<p style="font-size:.82rem; color:rgba(18,58,52,.6);">Tip: for normal restocking, use "Log Purchase" instead — it updates stock and cost together and keeps a history.</p>' : ''}
     <div class="modal-actions">
       <button class="btn-secondary" id="cancel">Cancel</button>
@@ -531,11 +534,15 @@ function ingredientForm(existing) {
   overlay.querySelector('#cancel').onclick = () => overlay.remove();
   overlay.querySelector('#save').onclick = async () => {
     try {
+      const unit = overlay.querySelector('#f-unit').value;
+      const purchaseUnit = overlay.querySelector('#f-punit').value.trim();
       const payload = {
         name: overlay.querySelector('#f-name').value,
-        unit: overlay.querySelector('#f-unit').value,
+        unit,
         cost_per_unit: parseFloat(overlay.querySelector('#f-cost').value),
-        current_stock: parseFloat(overlay.querySelector('#f-stock').value) || 0
+        current_stock: parseFloat(overlay.querySelector('#f-stock').value) || 0,
+        purchase_unit: purchaseUnit || unit,
+        purchase_ratio: parseFloat(overlay.querySelector('#f-ratio').value) || 1
       };
       if (isEdit) await api(`/ingredients/${existing.id}`, { method: 'PUT', body: payload });
       else await api('/ingredients', { method: 'POST', body: payload });
@@ -547,12 +554,16 @@ function ingredientForm(existing) {
 }
 
 function purchaseForm(ingredient) {
+  const pUnit = ingredient.purchase_unit || ingredient.unit;
+  const ratio = ingredient.purchase_ratio || 1;
   const overlay = openModal(`
     <h3>Log Purchase — ${escapeHtml(ingredient.name)}</h3>
-    <p style="font-size:.85rem; color:rgba(18,58,52,.65);">Enter what she actually bought and paid. Stock and cost-per-unit update automatically.</p>
-    <div class="field"><label>Quantity purchased (in ${escapeHtml(ingredient.unit)})</label><input type="number" step="0.01" id="f-qty" placeholder="e.g. 12"></div>
+    <p style="font-size:.85rem; color:rgba(18,58,52,.65);">Enter what she actually bought and paid. Stock and cost-per-${escapeHtml(ingredient.unit)} update automatically.</p>
+    <div class="field"><label>Quantity purchased (in ${escapeHtml(pUnit)})</label><input type="number" step="0.01" id="f-qty" placeholder="e.g. 1"></div>
     <div class="field"><label>Total amount paid</label><input type="number" step="0.01" id="f-total"></div>
-    <div class="field"><label>Calculated cost per ${escapeHtml(ingredient.unit)}: <span id="unit-preview" style="font-weight:700;">—</span></label></div>
+    <div class="field">
+      <label>= <span id="converted-qty">0</span> ${escapeHtml(ingredient.unit)} · Cost per ${escapeHtml(ingredient.unit)}: <span id="unit-preview" style="font-weight:700;">—</span></label>
+    </div>
     <div class="field"><label>Store (optional)</label><input id="f-store" placeholder="e.g. Shopno, local bazaar"></div>
     <div class="field"><label>Date</label><input type="date" id="f-date" value="${new Date().toISOString().slice(0,10)}"></div>
     <div class="field"><label>Notes (optional)</label><input id="f-notes"></div>
@@ -563,11 +574,14 @@ function purchaseForm(ingredient) {
   `);
   const qtyInput = overlay.querySelector('#f-qty');
   const totalInput = overlay.querySelector('#f-total');
+  const convertedEl = overlay.querySelector('#converted-qty');
   const preview = overlay.querySelector('#unit-preview');
   const updatePreview = () => {
-    const qty = parseFloat(qtyInput.value);
+    const qty = parseFloat(qtyInput.value) || 0;
     const total = parseFloat(totalInput.value);
-    preview.textContent = (qty > 0 && total >= 0) ? money(total / qty) : '—';
+    const converted = qty * ratio;
+    convertedEl.textContent = converted || 0;
+    preview.textContent = (converted > 0 && total >= 0 && !isNaN(total)) ? money(total / converted) : '—';
   };
   qtyInput.addEventListener('input', updatePreview);
   totalInput.addEventListener('input', updatePreview);
@@ -600,9 +614,10 @@ async function purchaseHistory(ingredient) {
   const overlay = openModal(`
     <h3>Purchase History — ${escapeHtml(ingredient.name)}</h3>
     ${!rows.length ? '<div class="empty">No purchases logged yet.</div>' : `
-      <table><tr><th>Date</th><th>Qty</th><th>Paid</th><th>Unit Cost</th><th>Store</th><th></th></tr>
+      <table><tr><th>Date</th><th>Bought</th><th>= In ${escapeHtml(ingredient.unit)}</th><th>Paid</th><th>Cost/${escapeHtml(ingredient.unit)}</th><th>Store</th><th></th></tr>
         ${rows.map(p => `<tr>
           <td>${escapeHtml(p.purchase_date)}</td>
+          <td>${p.purchase_quantity ?? p.quantity} ${escapeHtml(p.purchase_unit_label || ingredient.unit)}</td>
           <td>${p.quantity}</td>
           <td>${money(p.total_cost)}</td>
           <td>${money(p.unit_cost)}</td>
